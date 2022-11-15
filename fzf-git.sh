@@ -102,18 +102,18 @@ if [[ $- =~ i ]]; then
 
 # Redefine this function to change the options
 _fzf_git_fzf() {
-  fzf-tmux -p80%,60% -- \
+  fzf-tmux -p80%,80% -- \
     --layout=reverse --multi --height=50% --min-height=20 --border \
     --color='header:italic:underline' \
     --preview-window='right,50%,border-left' \
-    --bind='ctrl-/:change-preview-window(down,50%,border-top|hidden|)' "$@"
+    --bind='ctrl-v:change-preview-window(down,70%,border-top|hidden|)' "$@"
 }
 
 _fzf_git_check() {
-  git rev-parse HEAD > /dev/null 2>&1 && return
+    git rev-parse HEAD > /dev/null 2>&1 && return
 
-  [[ -n $TMUX ]] && tmux display-message "Not in a git repository"
-  return 1
+    [[ -n $TMUX ]] && tmux display-message "Not in a git repository"
+    return 1
 }
 
 __fzf_git=${BASH_SOURCE[0]:-${(%):-%x}}
@@ -121,27 +121,38 @@ __fzf_git=$(readlink -f "$__fzf_git" 2> /dev/null || /usr/bin/ruby --disable-gem
 
 if [[ -z $_fzf_git_cat ]]; then
   # Sometimes bat is installed as batcat
-  export _fzf_git_cat="cat"
-  _fzf_git_bat_options="--style='${BAT_STYLE:-full}' --color=always --pager=never"
-  if command -v batcat > /dev/null; then
-    _fzf_git_cat="batcat $_fzf_git_bat_options"
-  elif command -v bat > /dev/null; then
-    _fzf_git_cat="bat $_fzf_git_bat_options"
-  fi
+    export _fzf_git_cat="cat"
+    _fzf_git_bat_options="--style='${BAT_STYLE:-full}' --color=always --pager=never"
+    if command -v batcat > /dev/null; then
+        _fzf_git_cat="batcat $_fzf_git_bat_options"
+    elif command -v bat > /dev/null; then
+        _fzf_git_cat="bat $_fzf_git_bat_options"
+    fi
+fi
+
+if [[ $TERM_PROGRAM == 'tmux' ]]; then
+    _fzf_git_prev_window_width=$(($(tmux display-message -p '#{window_width}') * 75 / 100 ))
+else
+    _fzf_git_prev_window_width=$(($(tmux display-message -p '#{window_width}') * 98 / 100 ))
 fi
 
 _fzf_git_files() {
+  # (git -c color.status=always status --short 
+  # git ls-files | command -- grep -vxFf <(git status -s | grep '^[^?]' | cut -c4-; echo :) | sed 's/^/   /') |
+  # --preview "git diff --no-ext-diff --color=always -- {-1} | sed 1,4d; $_fzf_git_cat {-1}" "$@" |
+  #  |cut -c4- | sed 's/.* -> //'
   _fzf_git_check || return
-  (git -c color.status=always status --short
-   git ls-files | grep -vxFf <(git status -s | grep '^[^?]' | cut -c4-; echo :) | sed 's/^/   /') |
+  git diff --name-only --relative --diff-filter=d |
   _fzf_git_fzf -m --ansi --nth 2..,.. \
     --prompt '📁 Files> ' \
-    --header $'CTRL-O (open in browser) ╱ ALT-E (open in editor)\n\n' \
+    --header $'CTRL-O (open in browser) ╱ ALT-E (open in editor[vim]) / ALT-c (open in vscode)\n\n' \
     --bind "ctrl-o:execute-silent:bash $__fzf_git file {-1}" \
     --bind "alt-e:execute:${EDITOR:-vim} {-1} > /dev/tty" \
-    --preview "git diff --no-ext-diff --color=always -- {-1} | sed 1,4d; $_fzf_git_cat {-1}" "$@" |
-  cut -c4- | sed 's/.* -> //'
+    --bind "alt-c:execute:vscode {-1} > /dev/tty" \
+    --preview-window up,70%,border-bottom \
+    --preview "batdiff --delta --color --context=3 --terminal-width=${_fzf_git_prev_window_width} {-1} 2>/dev/null" "$@"
 }
+
 
 _fzf_git_branches() {
   _fzf_git_check || return
@@ -153,12 +164,13 @@ _fzf_git_branches() {
     --preview-window down,border-top,40% \
     --color hl:underline,hl+:underline \
     --no-hscroll \
-    --bind 'ctrl-/:change-preview-window(down,70%|hidden|)' \
+    --bind 'ctrl-v:change-preview-window(down,70%|hidden|)' \
     --bind "ctrl-o:execute-silent:bash $__fzf_git branch {}" \
     --bind "alt-a:change-prompt(🌳 All branches> )+reload:bash \"$__fzf_git\" all-branches" \
     --preview 'git log --oneline --graph --date=short --color=always --pretty="format:%C(auto)%cd %h%d %s" $(sed s/^..// <<< {} | cut -d" " -f1)' "$@" |
   sed 's/^..//' | cut -d' ' -f1
 }
+
 
 _fzf_git_tags() {
   _fzf_git_check || return
@@ -170,6 +182,7 @@ _fzf_git_tags() {
     --preview 'git show --color=always {}' "$@"
 }
 
+
 _fzf_git_hashes() {
   _fzf_git_check || return
   git log --date=short --format="%C(green)%C(bold)%cd %C(auto)%h%d %s (%an)" --graph --color=always |
@@ -179,21 +192,26 @@ _fzf_git_hashes() {
     --bind "ctrl-o:execute-silent:bash $__fzf_git commit {}" \
     --bind 'ctrl-d:execute:grep -o "[a-f0-9]\{7,\}" <<< {} | head -n 1 | xargs git diff > /dev/tty' \
     --color hl:underline,hl+:underline \
-    --preview 'grep -o "[a-f0-9]\{7,\}" <<< {} | head -n 1 | xargs git show --color=always' "$@" |
+	--preview-window up,70%,border-bottom \
+    --preview "grep -o '[a-f0-9]\{7,\}' <<< {} | head -n 1 | xargs -I% batdiff --color --delta --context=3 --terminal-width=${_fzf_git_prev_window_width} %" "$@" |
   awk 'match($0, /[a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9][a-f0-9]*/) { print substr($0, RSTART, RLENGTH) }'
 }
 
+
+ # git remote -v | awk '{print $1 "\t" $2}' | uniq |
+ # --header $'CTRL-O (open in browser)\n\n' \
 _fzf_git_remotes() {
   _fzf_git_check || return
-  git remote -v | awk '{print $1 "\t" $2}' | uniq |
+  bash "$__fzf_git" all-branches |awk '$1 ~ /\//{print $0}'|
   _fzf_git_fzf --tac \
     --prompt '📡 Remotes> ' \
     --header $'CTRL-O (open in browser)\n\n' \
     --bind "ctrl-o:execute-silent:bash $__fzf_git remote {1}" \
     --preview-window right,70% \
-    --preview 'git log --oneline --graph --date=short --color=always --pretty="format:%C(auto)%cd %h%d %s" {1}/"$(git rev-parse --abbrev-ref HEAD)"' "$@" |
+    --preview 'git log --oneline --graph --date=short --color=always --pretty="format:%C(auto)%cd %h%d %s" {1}' "$@" |
   cut -d$'\t' -f1
 }
+
 
 _fzf_git_stashes() {
   _fzf_git_check || return
@@ -201,9 +219,11 @@ _fzf_git_stashes() {
     --prompt '🥡 Stashes> ' \
     --header $'CTRL-X (drop stash)\n\n' \
     --bind 'ctrl-x:execute-silent(git stash drop {1})+reload(git stash list)' \
-    -d: --preview 'git show --color=always {1}' "$@" |
+    --preview-window up,70%,border-bottom \
+    -d: --preview "echo {1} |xargs -I% batdiff --color --delta --context=3 --terminal-width=${_fzf_git_prev_window_width} %" "$@" |
   cut -d: -f1
 }
+
 
 _fzf_git_each_ref() {
   _fzf_git_check || return
@@ -215,7 +235,7 @@ _fzf_git_each_ref() {
     --preview-window down,border-top,40% \
     --color hl:underline,hl+:underline \
     --no-hscroll \
-    --bind 'ctrl-/:change-preview-window(down,70%|hidden|)' \
+    --bind 'ctrl-v:change-preview-window(down,70%|hidden|)' \
     --bind "ctrl-o:execute-silent:bash $__fzf_git {1} {2}" \
     --bind "alt-e:execute:${EDITOR:-vim} <(git show {2}) > /dev/tty" \
     --bind "alt-a:change-prompt(🍀 Every ref> )+reload:bash \"$__fzf_git\" all-refs" \
@@ -223,13 +243,14 @@ _fzf_git_each_ref() {
   awk '{print $2}'
 }
 
+
 if [[ -n "${BASH_VERSION:-}" ]]; then
   __fzf_git_init() {
     bind '"\er": redraw-current-line'
     local o
     for o in "$@"; do
-      bind '"\C-g\C-'${o:0:1}'": "`_fzf_git_'$o'`\e\C-e\er"'
-      bind '"\C-g'${o:0:1}'": "`_fzf_git_'$o'`\e\C-e\er"'
+      bind '"\C-x\C-'${o:0:1}'": "`_fzf_git_'$o'`\e\C-e\er"'
+      # bind '"\C-x'${o:0:1}'": "`_fzf_git_'$o'`\e\C-e\er"'
     done
   }
 elif [[ -n "${ZSH_VERSION:-}" ]]; then
@@ -245,12 +266,13 @@ elif [[ -n "${ZSH_VERSION:-}" ]]; then
     for o in "$@"; do
       eval "fzf-git-$o-widget() { local result=\$(_fzf_git_$o | __fzf_git_join); zle reset-prompt; LBUFFER+=\$result }"
       eval "zle -N fzf-git-$o-widget"
-      eval "bindkey '^g^${o[1]}' fzf-git-$o-widget"
-      eval "bindkey '^g${o[1]}' fzf-git-$o-widget"
+      eval "bindkey '^x^${o[1]}' fzf-git-$o-widget"
+      # eval "bindkey '^x${o[1]}' fzf-git-$o-widget"
     done
   }
 fi
-__fzf_git_init files branches tags remotes hashes stashes each_ref
+__fzf_git_init files branches tags hashes stashes
+# __fzf_git_init files branches tags remotes hashes stashes each_ref
 
 # -----------------------------------------------------------------------------
 fi
